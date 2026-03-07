@@ -12,7 +12,7 @@ spec:
     - OWNER_ID — Your Telegram numeric user ID. Get it from @getidsbot. Supports multiple IDs separated by spaces.
     - MONGO_DB — MongoDB connection string. Get a free instance at MongoDB Atlas (mongodb.com/cloud/atlas/register).
 
-    Optional variables (STRING, LOG_GROUP, MASTER_KEY, IV_KEY) are documented in the GitHub README.
+    Optional variables (STRING, LOG_GROUP, MASTER_KEY, IV_KEY) are documented in the [GitHub README](https://github.com/yoashau/Teleforwarder).
 
   icon: https://picui.ogmua.cn/s1/2026/03/07/69abff3f3d837.webp
   tags:

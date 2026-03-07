@@ -1,33 +1,25 @@
-"""
-batch.py — 核心提取引擎
-暴露的公共接口：
-  extract_single(pyro_client, message, tg_url)  — 提取单条消息
-  extract_range(pyro_client, message, tg_url, count)  — 批量提取
-"""
-
 import os
 import re
 import time
 import asyncio
 import json
 from pyrogram import Client
+from pyrogram.errors import ChatForwardsRestricted, MessageForwardsRestricted, PeerIdInvalid
 from config import API_ID, API_HASH, LOG_GROUP, STRING
 from utils.func import (
     get_user_data, get_user_data_key, process_text_with_rules,
     screenshot, thumbnail, get_video_metadata, E
 )
 from utils.encrypt import dcs
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 
 Y = None if not STRING else __import__('shared_client').userbot
 
 # ─── 全局状态 ─────────────────────────────────────────────────────────────────
-Z = {}          # 兼容旧代码（不再使用）
 P = {}          # 进度条去重
 UB = {}         # user_id → 辅助 bot Client
 UC = {}         # user_id → 用户 Client（session）
-emp = {}        # channel_id → empty 标记
 
 ACTIVE_USERS: Dict[str, Any] = {}
 ACTIVE_USERS_FILE = "active_users.json"
@@ -95,13 +87,25 @@ def get_batch_info(user_id: int) -> Optional[Dict[str, Any]]:
 ACTIVE_USERS = _load_active_users()
 
 
-# ─── 文件名清理 ───────────────────────────────────────────────────────────────
+# ─── 工具函数 ─────────────────────────────────────────────────────────────────
 
 def sanitize(filename):
     return re.sub(r'[<>:"/\\|?*\']', '_', filename).strip(" .")[:255]
 
 
-# ─── 对话刷新 ─────────────────────────────────────────────────────────────────
+def _filename(m) -> str:
+    if m.video:
+        return sanitize(m.video.file_name or f'{time.time()}.mp4')
+    if m.audio:
+        return sanitize(m.audio.file_name or f'{time.time()}.mp3')
+    if m.document:
+        return sanitize(m.document.file_name or f'{time.time()}')
+    if m.animation:
+        return sanitize(m.animation.file_name or f'{time.time()}.mp4')
+    if m.photo:
+        return sanitize(f'{time.time()}.jpg')
+    return f'{time.time()}'
+
 
 async def upd_dlg(c):
     try:
@@ -122,61 +126,62 @@ async def get_msg(c, u, i, d, lt):
     try:
         if lt == 'public':
             try:
-                if str(i).lower().endswith('bot'):
-                    emp[i] = False
-                    xm = await u.get_messages(i, d)
-                    emp[i] = getattr(xm, "empty", False)
-                    if not emp[i]:
-                        emp[i] = True
-                        return xm
-
-                if emp.get(i, True):
-                    xm = await c.get_messages(i, d)
-                    emp[i] = getattr(xm, "empty", False)
-                    if emp[i]:
-                        try:
-                            await u.join_chat(i)
-                        except Exception:
-                            pass
-                        xm = await u.get_messages((await u.get_chat(f"@{i}")).id, d)
+                xm = await c.get_messages(i, d)
+                if xm and not getattr(xm, 'empty', False):
                     return xm
+            except Exception:
+                pass
+
+            if not u:
+                return None
+
+            try:
+                try:
+                    await u.join_chat(i)
+                except Exception:
+                    pass
+                cid = i if str(i).lstrip('-').isdigit() else (await u.get_chat(f'@{i}')).id
+                xm = await u.get_messages(cid, d)
+                return xm if xm and not getattr(xm, 'empty', False) else None
             except Exception as e:
                 print(f"获取公开消息出错: {e}")
                 return None
+
         else:
-            if u:
-                try:
-                    async for _ in u.get_dialogs(limit=50):
-                        pass
-                    if str(i).startswith('-100'):
-                        chat_id_100 = i
-                        base_id = str(i)[4:]
-                        chat_id_dash = f"-{base_id}"
-                    elif str(i).isdigit():
-                        chat_id_100 = f"-100{i}"
-                        chat_id_dash = f"-{i}"
-                    else:
-                        chat_id_100 = i
-                        chat_id_dash = i
+            if not u:
+                return None
+            try:
+                si = str(i)
+                if si.startswith('-100'):
+                    variants = [int(si), int(f'-{si[4:]}')]
+                elif si.lstrip('-').isdigit():
+                    n = si.lstrip('-')
+                    variants = [int(f'-100{n}'), int(f'-{n}')]
+                else:
+                    variants = [i]
 
-                    for cid in [chat_id_100, chat_id_dash]:
-                        try:
-                            result = await u.get_messages(cid, d)
-                            if result and not getattr(result, "empty", False):
-                                return result
-                        except Exception:
-                            pass
-
-                    async for _ in u.get_dialogs(limit=200):
+                for cid in variants:
+                    try:
+                        xm = await u.get_messages(cid, d)
+                        if xm and not getattr(xm, 'empty', False):
+                            return xm
+                    except Exception:
                         pass
-                    result = await u.get_messages(i, d)
-                    if result and not getattr(result, "empty", False):
-                        return result
-                    return None
-                except Exception as e:
-                    print(f"获取私有频道消息出错: {e}")
-                    return None
-            return None
+
+                await upd_dlg(u)
+                for cid in variants:
+                    try:
+                        xm = await u.get_messages(cid, d)
+                        if xm and not getattr(xm, 'empty', False):
+                            return xm
+                    except Exception:
+                        pass
+
+                return None
+            except Exception as e:
+                print(f"获取私有频道消息出错: {e}")
+                return None
+
     except Exception as e:
         print(f"获取消息出错: {e}")
         return None
@@ -185,7 +190,6 @@ async def get_msg(c, u, i, d, lt):
 # ─── 辅助 Bot 与用户客户端 ───────────────────────────────────────────────────
 
 async def get_ubot(uid):
-    """获取用户绑定的辅助 bot；若无则返回 None。"""
     bt = await get_user_data_key(uid, "bot_token", None)
     if not bt:
         return None
@@ -202,7 +206,6 @@ async def get_ubot(uid):
 
 
 async def get_uclient(uid):
-    """获取用户的个人 Pyrogram 客户端（用于下载私有内容）。"""
     ud = await get_user_data(uid)
     ubot = UB.get(uid)
     cl = UC.get(uid)
@@ -254,194 +257,287 @@ async def prog(c, t, C, h, m, st):
             P.pop(m, None)
 
 
-# ─── 直接转发（不落盘）────────────────────────────────────────────────────────
+# ─── 相册（Media Group）处理 ──────────────────────────────────────────────────
 
-async def send_direct(c, m, tcid, ft=None, rtmid=None):
+async def _fetch_media_group(client, m) -> List:
+    """获取同一相册内的全部消息（按 ID 升序）。"""
     try:
-        if m.video:
-            await c.send_video(tcid, m.video.file_id, caption=ft,
-                               duration=m.video.duration, width=m.video.width,
-                               height=m.video.height, reply_to_message_id=rtmid)
-        elif m.video_note:
-            await c.send_video_note(tcid, m.video_note.file_id, reply_to_message_id=rtmid)
-        elif m.voice:
-            await c.send_voice(tcid, m.voice.file_id, reply_to_message_id=rtmid)
-        elif m.sticker:
-            await c.send_sticker(tcid, m.sticker.file_id, reply_to_message_id=rtmid)
-        elif m.audio:
-            await c.send_audio(tcid, m.audio.file_id, caption=ft,
-                               duration=m.audio.duration, performer=m.audio.performer,
-                               title=m.audio.title, reply_to_message_id=rtmid)
-        elif m.photo:
-            photo_id = m.photo.file_id if hasattr(m.photo, 'file_id') else m.photo[-1].file_id
-            await c.send_photo(tcid, photo_id, caption=ft, reply_to_message_id=rtmid)
-        elif m.document:
-            await c.send_document(tcid, m.document.file_id, caption=ft,
-                                  file_name=m.document.file_name, reply_to_message_id=rtmid)
-        else:
-            return False
-        return True
+        ids = list(range(max(1, m.id - 9), m.id + 10))
+        msgs = await client.get_messages(m.chat.id, ids)
+        gid = m.media_group_id
+        group = [x for x in msgs
+                 if x and not getattr(x, 'empty', False)
+                 and getattr(x, 'media_group_id', None) == gid]
+        return sorted(group, key=lambda x: x.id) if group else [m]
+    except Exception:
+        return [m]
+
+
+async def _send_media_group_physical(c, u, m, tcid, d, rtmid, cap):
+    """物理搬运相册：逐个下载后组合为 send_media_group。"""
+    from pyrogram.types import (
+        InputMediaPhoto, InputMediaVideo,
+        InputMediaDocument, InputMediaAudio,
+    )
+
+    group_msgs = await _fetch_media_group(u, m)
+    total = len(group_msgs)
+    p_msg = await c.send_message(d, f'⬇️ 正在下载相册（共 {total} 项）...')
+    files = []
+
+    try:
+        media_inputs = []
+        for idx, gm in enumerate(group_msgs):
+            gf = await u.download_media(gm, file_name=_filename(gm))
+            if not gf:
+                continue
+            files.append(gf)
+            # caption 只放在最后一项
+            item_cap = cap if idx == total - 1 else None
+            if gm.photo:
+                media_inputs.append(InputMediaPhoto(gf, caption=item_cap))
+            elif gm.video:
+                media_inputs.append(InputMediaVideo(gf, caption=item_cap))
+            elif gm.audio:
+                media_inputs.append(InputMediaAudio(gf, caption=item_cap))
+            else:
+                media_inputs.append(InputMediaDocument(gf, caption=item_cap))
+
+        if media_inputs:
+            try:
+                await c.send_media_group(tcid, media_inputs, reply_to_message_id=rtmid)
+            except PeerIdInvalid:
+                return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
+
+        await c.delete_messages(d, p_msg.id)
+        return '完成。'
+
     except Exception as e:
-        print(f"直接转发出错: {e}")
-        return False
+        try:
+            await c.edit_message_text(d, p_msg.id, f'⚠️ 出错：{str(e)[:80]}')
+        except Exception:
+            pass
+        return f'出错：{str(e)[:80]}'
+
+    finally:
+        for gf in files:
+            if gf and os.path.exists(gf):
+                try:
+                    os.remove(gf)
+                except Exception:
+                    pass
 
 
 # ─── 核心消息处理 ─────────────────────────────────────────────────────────────
 
 async def process_msg(c, u, m, d, lt, uid, i):
-    """处理单条消息：下载并上传到用户的聊天。
+    """处理单条消息：1:1 克隆转发，遇到禁止转发限制则降级物理搬运。
     c = 上传 bot; u = 下载 client; m = 源消息;
     d = 目标 chat_id(str); lt = link_type; uid = user_id; i = channel_id
     """
     try:
+        # 解析目标聊天
         cfg_chat = await get_user_data_key(d, 'chat_id', None)
         tcid = d
         rtmid = None
         if cfg_chat:
-            if '/' in cfg_chat:
-                parts = cfg_chat.split('/', 1)
+            if '/' in str(cfg_chat):
+                parts = str(cfg_chat).split('/', 1)
                 tcid = int(parts[0])
                 rtmid = int(parts[1]) if len(parts) > 1 else None
             else:
                 tcid = int(cfg_chat)
 
-        if m.media:
-            orig_text = m.caption.markdown if m.caption else ''
-            proc_text = await process_text_with_rules(d, orig_text)
-            user_cap = await get_user_data_key(d, 'caption', '')
-            ft = (f'{proc_text}\n\n{user_cap}' if proc_text and user_cap
-                  else user_cap if user_cap else proc_text)
+        user_cap = await get_user_data_key(d, 'caption', '') or ''
 
-            if lt == 'public' and not emp.get(i, False):
-                await send_direct(c, m, tcid, ft, rtmid)
-                return '直接转发完成。'
+        # ── 纯文本消息 ────────────────────────────────────────────────────────
+        if m.text and not m.media:
+            proc = await process_text_with_rules(d, m.text.markdown)
+            final = f'{proc}\n\n{user_cap}' if user_cap else proc
+            try:
+                await c.send_message(tcid, final, reply_to_message_id=rtmid)
+            except PeerIdInvalid:
+                return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
+            return '完成。'
 
-            st = time.time()
-            p = await c.send_message(d, '⬇️ 正在下载...')
+        # ── 计算最终 caption ──────────────────────────────────────────────────
+        orig_cap = m.caption.markdown if m.caption else ''
+        proc_cap = await process_text_with_rules(d, orig_cap)
+        if proc_cap and user_cap:
+            final_cap = f'{proc_cap}\n\n{user_cap}'
+        elif user_cap:
+            final_cap = user_cap
+        elif proc_cap != orig_cap:
+            final_cap = proc_cap
+        else:
+            final_cap = None  # 不覆盖，原生克隆完整保留原始排版
 
-            c_name = f"{time.time()}"
-            if m.video:
-                file_name = m.video.file_name or f"{time.time()}.mp4"
-                c_name = sanitize(file_name)
-            elif m.audio:
-                file_name = m.audio.file_name or f"{time.time()}.mp3"
-                c_name = sanitize(file_name)
-            elif m.document:
-                file_name = m.document.file_name or f"{time.time()}"
-                c_name = sanitize(file_name)
-            elif m.photo:
-                c_name = sanitize(f"{time.time()}.jpg")
+        # 物理搬运时使用的 caption（确保有内容时不丢失）
+        cap = final_cap if final_cap is not None else (orig_cap or None)
 
-            f = await u.download_media(m, file_name=c_name, progress=prog,
-                                       progress_args=(c, d, p.id, st))
+        # ── 相册（Media Group）────────────────────────────────────────────────
+        if getattr(m, 'media_group_id', None):
+            # 优先尝试原生克隆整组
+            if hasattr(c, 'copy_media_group'):
+                try:
+                    await c.copy_media_group(tcid, m.chat.id, m.id,
+                                             reply_to_message_id=rtmid)
+                    return '完成。'
+                except (ChatForwardsRestricted, MessageForwardsRestricted):
+                    pass
+                except PeerIdInvalid:
+                    return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
+                except Exception:
+                    pass
+            # 降级：物理搬运整组相册
+            return await _send_media_group_physical(c, u, m, tcid, d, rtmid, cap)
 
+        # ── 单条媒体：优先原生克隆 ────────────────────────────────────────────
+        try:
+            await c.copy_message(
+                tcid, m.chat.id, m.id,
+                caption=final_cap,
+                reply_to_message_id=rtmid
+            )
+            return '完成。'
+        except (ChatForwardsRestricted, MessageForwardsRestricted):
+            pass  # 降级物理搬运
+        except PeerIdInvalid:
+            return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
+        except Exception as e:
+            return f'出错：{str(e)[:80]}'
+
+        # ── 物理搬运降级（突破禁止转发限制）─────────────────────────────────
+        p = await c.send_message(d, '⬇️ 正在下载...')
+        f = None
+        st = time.time()
+
+        try:
+            f = await u.download_media(m, file_name=_filename(m),
+                                        progress=prog, progress_args=(c, d, p.id, st))
             if not f:
                 await c.edit_message_text(d, p.id, '❌ 下载失败。')
                 return '下载失败。'
 
             await c.edit_message_text(d, p.id, '✏️ 正在重命名...')
-            if (
-                (m.video and m.video.file_name) or
-                (m.audio and m.audio.file_name) or
-                (m.document and m.document.file_name)
-            ):
+            if ((m.video and m.video.file_name) or
+                    (m.audio and m.audio.file_name) or
+                    (m.document and m.document.file_name)):
                 from plugins.settings import rename_file
                 f = await rename_file(f, d, p)
 
-            fsize = os.path.getsize(f) / (1024 * 1024 * 1024)
+            fsize = os.path.getsize(f) / (1024 ** 3)
             th = thumbnail(d)
 
+            # 超过 2GB：走 Premium 用户 bot 上传通道
             if fsize > 2 and Y:
                 await c.edit_message_text(d, p.id, '⚠️ 文件超过 2GB，使用高级通道上传...')
                 await upd_dlg(Y)
                 mtd = await get_video_metadata(f)
-                dur, h, w = mtd['duration'], mtd['width'], mtd['height']
+                dur, vh, vw = mtd['duration'], mtd['height'], mtd['width']
                 th = await screenshot(f, dur, d)
                 st = time.time()
 
-                send_funcs = {
-                    'video': Y.send_video, 'video_note': Y.send_video_note,
-                    'voice': Y.send_voice, 'audio': Y.send_audio,
-                    'photo': Y.send_photo, 'document': Y.send_document
-                }
-                for mtype, func in send_funcs.items():
-                    if f.endswith('.mp4'):
-                        mtype = 'video'
-                    if getattr(m, mtype, None):
-                        sent = await func(
-                            LOG_GROUP, f,
-                            thumb=th if mtype == 'video' else None,
-                            duration=dur if mtype == 'video' else None,
-                            height=h if mtype == 'video' else None,
-                            width=w if mtype == 'video' else None,
-                            caption=ft if m.caption and mtype not in ['video_note', 'voice'] else None,
-                            reply_to_message_id=rtmid,
-                            progress=prog, progress_args=(c, d, p.id, st)
-                        )
-                        break
+                if m.video or f.lower().endswith('.mp4'):
+                    sent = await Y.send_video(
+                        LOG_GROUP, f, thumb=th, duration=dur, height=vh, width=vw,
+                        caption=cap, progress=prog, progress_args=(c, d, p.id, st))
+                elif m.audio:
+                    sent = await Y.send_audio(
+                        LOG_GROUP, f, caption=cap,
+                        progress=prog, progress_args=(c, d, p.id, st))
+                elif m.photo:
+                    sent = await Y.send_photo(
+                        LOG_GROUP, f, caption=cap,
+                        progress=prog, progress_args=(c, d, p.id, st))
+                elif m.video_note:
+                    sent = await Y.send_video_note(
+                        LOG_GROUP, f,
+                        progress=prog, progress_args=(c, d, p.id, st))
+                elif m.voice:
+                    sent = await Y.send_voice(
+                        LOG_GROUP, f,
+                        progress=prog, progress_args=(c, d, p.id, st))
                 else:
                     sent = await Y.send_document(
-                        LOG_GROUP, f, thumb=th, caption=ft if m.caption else None,
-                        reply_to_message_id=rtmid,
-                        progress=prog, progress_args=(c, d, p.id, st)
-                    )
+                        LOG_GROUP, f, thumb=th, caption=cap,
+                        progress=prog, progress_args=(c, d, p.id, st))
 
                 await c.copy_message(d, LOG_GROUP, sent.id)
-                os.remove(f)
                 await c.delete_messages(d, p.id)
+                os.remove(f)
+                f = None
                 return '完成（大文件）。'
 
+            # 常规上传
             await c.edit_message_text(d, p.id, '⬆️ 正在上传...')
             st = time.time()
 
+            video_exts = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.ogv'}
+            audio_exts = {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus', '.aiff', '.ac3'}
+            ext = os.path.splitext(f)[1].lower()
+
             try:
-                video_extensions = ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.3gp', '.ogv']
-                audio_extensions = ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus', '.aiff', '.ac3']
-                file_ext = os.path.splitext(f)[1].lower()
-                if m.video or (m.document and file_ext in video_extensions):
+                if m.video or ext in video_exts:
                     mtd = await get_video_metadata(f)
-                    dur, h, w = mtd['duration'], mtd['width'], mtd['height']
+                    dur, vh, vw = mtd['duration'], mtd['height'], mtd['width']
                     th = await screenshot(f, dur, d)
-                    await c.send_video(tcid, video=f, caption=ft if m.caption else None,
-                                       thumb=th, width=w, height=h, duration=dur,
+                    await c.send_video(tcid, f, caption=cap, thumb=th,
+                                       width=vw, height=vh, duration=dur,
                                        progress=prog, progress_args=(c, d, p.id, st),
                                        reply_to_message_id=rtmid)
                 elif m.video_note:
-                    await c.send_video_note(tcid, video_note=f, progress=prog,
-                                            progress_args=(c, d, p.id, st),
-                                            reply_to_message_id=rtmid)
+                    await c.send_video_note(tcid, f,
+                                             progress=prog, progress_args=(c, d, p.id, st),
+                                             reply_to_message_id=rtmid)
                 elif m.voice:
-                    await c.send_voice(tcid, f, progress=prog,
-                                       progress_args=(c, d, p.id, st),
-                                       reply_to_message_id=rtmid)
+                    await c.send_voice(tcid, f,
+                                        progress=prog, progress_args=(c, d, p.id, st),
+                                        reply_to_message_id=rtmid)
+                elif m.animation:
+                    await c.send_animation(tcid, f, caption=cap,
+                                            progress=prog, progress_args=(c, d, p.id, st),
+                                            reply_to_message_id=rtmid)
                 elif m.sticker:
-                    await c.send_sticker(tcid, m.sticker.file_id, reply_to_message_id=rtmid)
-                elif m.audio or (m.document and file_ext in audio_extensions):
-                    await c.send_audio(tcid, audio=f, caption=ft if m.caption else None,
-                                       thumb=th, progress=prog,
-                                       progress_args=(c, d, p.id, st),
-                                       reply_to_message_id=rtmid)
+                    await c.send_sticker(tcid, f, reply_to_message_id=rtmid)
+                elif m.audio or ext in audio_exts:
+                    await c.send_audio(tcid, f, caption=cap, thumb=th,
+                                        progress=prog, progress_args=(c, d, p.id, st),
+                                        reply_to_message_id=rtmid)
                 elif m.photo:
-                    await c.send_photo(tcid, photo=f, caption=ft if m.caption else None,
-                                       progress=prog, progress_args=(c, d, p.id, st),
-                                       reply_to_message_id=rtmid)
+                    await c.send_photo(tcid, f, caption=cap,
+                                        progress=prog, progress_args=(c, d, p.id, st),
+                                        reply_to_message_id=rtmid)
                 else:
-                    await c.send_document(tcid, document=f, caption=ft if m.caption else None,
-                                          progress=prog, progress_args=(c, d, p.id, st),
-                                          reply_to_message_id=rtmid)
+                    await c.send_document(tcid, f, caption=cap,
+                                           progress=prog, progress_args=(c, d, p.id, st),
+                                           reply_to_message_id=rtmid)
+            except PeerIdInvalid:
+                await c.edit_message_text(
+                    d, p.id,
+                    '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
+                )
+                return '转发失败。'
             except Exception as e:
                 await c.edit_message_text(d, p.id, f'⚠️ 上传失败：{str(e)[:50]}')
-                if os.path.exists(f):
-                    os.remove(f)
                 return '上传失败。'
 
-            os.remove(f)
             await c.delete_messages(d, p.id)
             return '完成。'
 
-        elif m.text:
-            await c.send_message(tcid, text=m.text.markdown, reply_to_message_id=rtmid)
-            return '文本已发送。'
+        except Exception as e:
+            try:
+                await c.edit_message_text(d, p.id, f'⚠️ 出错：{str(e)[:80]}')
+            except Exception:
+                pass
+            return f'出错：{str(e)[:80]}'
+
+        finally:
+            if f and os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
 
     except Exception as e:
         return f'出错：{str(e)[:80]}'
@@ -450,7 +546,6 @@ async def process_msg(c, u, m, d, lt, uid, i):
 # ─── 公共接口：单条提取 ───────────────────────────────────────────────────────
 
 async def extract_single(pyro_client, message, tg_url: str):
-    """供 router.py 调用：提取单条 Telegram 消息。"""
     uid = message.from_user.id
     chat_id = str(message.chat.id)
 
@@ -471,7 +566,6 @@ async def extract_single(pyro_client, message, tg_url: str):
         if not uc:
             uc = pyro_client
 
-    # 上传用 bot：优先辅助 bot，否则主 bot
     upload_bot = await get_ubot(uid) or pyro_client
 
     status = await message.reply("⏳ 正在处理...")
@@ -489,7 +583,6 @@ async def extract_single(pyro_client, message, tg_url: str):
 # ─── 公共接口：批量提取 ───────────────────────────────────────────────────────
 
 async def extract_range(pyro_client, message, tg_url: str, count: int):
-    """供 router.py 调用：从指定链接开始连续提取 count 条消息。"""
     uid = message.from_user.id
     chat_id = str(message.chat.id)
 
@@ -525,6 +618,8 @@ async def extract_range(pyro_client, message, tg_url: str, count: int):
     })
 
     try:
+        seen_groups: set = set()  # 已处理的相册 media_group_id，避免重复发送
+
         for j in range(count):
             if should_cancel(uid):
                 await pt.edit(f"🚫 已取消，进度：{j}/{count}，成功：{success}")
@@ -533,10 +628,20 @@ async def extract_range(pyro_client, message, tg_url: str, count: int):
             mid = sid + j
             try:
                 msg = await get_msg(upload_bot, uc, cid, mid, lt)
-                if msg and not getattr(msg, "empty", False):
-                    res = await process_msg(upload_bot, uc, msg, chat_id, lt, uid, cid)
-                    if any(kw in res for kw in ['完成', '转发', '发送']):
-                        success += 1
+                if not msg or getattr(msg, "empty", False):
+                    continue
+
+                # 同一相册只处理第一条，跳过其余
+                gid = getattr(msg, 'media_group_id', None)
+                if gid:
+                    if gid in seen_groups:
+                        success += 1  # 相册已整体发送，计为成功
+                        continue
+                    seen_groups.add(gid)
+
+                res = await process_msg(upload_bot, uc, msg, chat_id, lt, uid, cid)
+                if any(kw in res for kw in ['完成', '转发', '发送']):
+                    success += 1
             except Exception as e:
                 try:
                     await pt.edit(f"⏳ {j + 1}/{count} 出错：{str(e)[:30]}")
