@@ -4,7 +4,7 @@ import time
 import asyncio
 import json
 from pyrogram import Client
-from pyrogram.errors import ChatForwardsRestricted, MessageForwardsRestricted, PeerIdInvalid
+from pyrogram.errors import ChatForwardsRestricted, PeerIdInvalid
 from config import API_ID, API_HASH, LOG_GROUP, STRING
 from utils.func import (
     get_user_data, get_user_data_key, process_text_with_rules,
@@ -383,7 +383,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
                     await c.copy_media_group(tcid, m.chat.id, m.id,
                                              reply_to_message_id=rtmid)
                     return '完成。'
-                except (ChatForwardsRestricted, MessageForwardsRestricted):
+                except ChatForwardsRestricted:
                     pass
                 except PeerIdInvalid:
                     return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
@@ -400,7 +400,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
                 reply_to_message_id=rtmid
             )
             return '完成。'
-        except (ChatForwardsRestricted, MessageForwardsRestricted):
+        except ChatForwardsRestricted:
             pass  # 降级物理搬运
         except PeerIdInvalid:
             return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
