@@ -1,0 +1,71 @@
+apiVersion: zeabur.com/v1
+kind: Template
+metadata:
+  name: Teleforwarder
+spec:
+  readme: |-
+    A private Telegram bot for extracting and forwarding content from public and private channels/groups.
+
+    Required variables:
+    - API_ID / API_HASH — Your Telegram API credentials. Get them at my.telegram.org → API development tools → create an app.
+    - BOT_TOKEN — Your bot token from @BotFather (/newbot).
+    - OWNER_ID — Your Telegram numeric user ID. Get it from @getidsbot. Supports multiple IDs separated by spaces.
+    - MONGO_DB — MongoDB connection string. Get a free instance at MongoDB Atlas (mongodb.com/cloud/atlas/register).
+
+    Optional variables (STRING, LOG_GROUP, MASTER_KEY, IV_KEY) are documented in the GitHub README.
+
+  icon: https://picui.ogmua.cn/s1/2026/03/07/69abff3f3d837.webp
+  tags:
+    - Tool
+    - Bot
+  variables:
+    - key: API_ID
+      type: STRING
+      name: API_ID
+      description: Telegram API ID
+    - key: API_HASH
+      type: STRING
+      name: API_HASH
+      description: Telegram API HASH
+    - key: BOT_TOKEN
+      type: STRING
+      name: BOT_TOKEN
+      description: Telegram Bot Token
+    - key: OWNER_ID
+      type: STRING
+      name: OWNER_ID
+      description: Admin User ID
+  services:
+    - name: db-node
+      icon: https://picui.ogmua.cn/s1/2026/03/07/69ac0fc93e616.webp
+      template: PREBUILT
+      spec:
+        source:
+          image: mongo:latest
+        ports:
+          - id: database
+            port: 27017
+            type: TCP
+    - name: core-node
+      icon: https://picui.ogmua.cn/s1/2026/03/07/69abff3f3d837.webp
+      template: GIT
+      dependencies:
+        - db-node
+      spec:
+        source:
+          source: GITHUB
+          repo: 1175130481
+          branch: main
+        env:
+          API_ID:
+            default: ${API_ID}
+          API_HASH:
+            default: ${API_HASH}
+          BOT_TOKEN:
+            default: ${BOT_TOKEN}
+          OWNER_ID:
+            default: ${OWNER_ID}
+          MONGO_DB:
+            default: mongodb://db-node.zeabur.internal:27017
+          DB_NAME:
+            default: payload_vault

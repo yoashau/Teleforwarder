@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables
+.env
+.env.*
+
+# Pyrogram / Telethon session files
+*.session
+*.session-journal
+
+# Runtime generated files
+downloads/
+temp/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.mkv
+*.webm
+*.mp3
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Windows Zone.Identifier (download metadata)
+*:Zone.Identifier
