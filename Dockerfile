@@ -15,8 +15,7 @@ WORKDIR /app
 
 # 先复制依赖文件（利用 Docker 层缓存）
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir --upgrade pip wheel
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制项目代码
 COPY . .
