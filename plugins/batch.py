@@ -288,7 +288,13 @@ async def _send_media_group_physical(c, u, m, tcid, d, rtmid, cap):
     try:
         media_inputs = []
         for idx, gm in enumerate(group_msgs):
-            gf = await u.download_media(gm, file_name=_filename(gm))
+            try:
+                await c.edit_message_text(d, p_msg.id, f'⬇️ 正在下载相册 {idx + 1}/{total}...')
+            except Exception:
+                pass
+            st = time.time()
+            gf = await u.download_media(gm, file_name=_filename(gm),
+                                         progress=prog, progress_args=(c, d, p_msg.id, st))
             if not gf:
                 continue
             files.append(gf)
@@ -304,6 +310,10 @@ async def _send_media_group_physical(c, u, m, tcid, d, rtmid, cap):
                 media_inputs.append(InputMediaDocument(gf, caption=item_cap))
 
         if media_inputs:
+            try:
+                await c.edit_message_text(d, p_msg.id, f'⬆️ 正在上传相册（共 {len(media_inputs)} 项）...')
+            except Exception:
+                pass
             try:
                 await c.send_media_group(tcid, media_inputs, reply_to_message_id=rtmid)
             except PeerIdInvalid:
@@ -433,6 +443,7 @@ async def process_msg(c, u, m, d, lt, uid, i):
             if fsize > 2 and Y:
                 await c.edit_message_text(d, p.id, '⚠️ 文件超过 2GB，使用高级通道上传...')
                 await upd_dlg(Y)
+                await c.edit_message_text(d, p.id, '🎬 正在处理视频元数据...')
                 mtd = await get_video_metadata(f)
                 dur, vh, vw = mtd['duration'], mtd['height'], mtd['width']
                 th = await screenshot(f, dur, d)
@@ -479,9 +490,12 @@ async def process_msg(c, u, m, d, lt, uid, i):
 
             try:
                 if m.video or ext in video_exts:
+                    await c.edit_message_text(d, p.id, '🎬 正在处理视频元数据...')
                     mtd = await get_video_metadata(f)
                     dur, vh, vw = mtd['duration'], mtd['height'], mtd['width']
                     th = await screenshot(f, dur, d)
+                    await c.edit_message_text(d, p.id, '⬆️ 正在上传...')
+                    st = time.time()
                     await c.send_video(tcid, f, caption=cap, thumb=th,
                                        width=vw, height=vh, duration=dur,
                                        progress=prog, progress_args=(c, d, p.id, st),
@@ -625,6 +639,10 @@ async def extract_range(pyro_client, message, tg_url: str, count: int):
                 await pt.edit(f"🚫 已取消，进度：{j}/{count}，成功：{success}")
                 break
             await update_batch_progress(uid, j, success)
+            try:
+                await pt.edit(f"⏳ 正在处理 {j + 1}/{count}，已成功：{success}")
+            except Exception:
+                pass
             mid = sid + j
             try:
                 msg = await get_msg(upload_bot, uc, cid, mid, lt)
