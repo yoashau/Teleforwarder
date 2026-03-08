@@ -1,4 +1,3 @@
-import concurrent.futures
 import time
 import os
 import re
@@ -169,41 +168,44 @@ async def screenshot(video: str, duration: int, sender: str) -> str | None:
     process = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    stdout, stderr = await process.communicate()
+    try:
+        _, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        try:
+            process.kill()
+        except Exception:
+            pass
+        return None
     if os.path.isfile(output_file):
         return output_file
-    else:
-        print(f"FFmpeg 错误: {stderr.decode().strip()}")
-        return None
+    print(f"FFmpeg 错误: {stderr.decode().strip()}")
+    return None
 
 
 async def get_video_metadata(file_path):
     default_values = {'width': 1, 'height': 1, 'duration': 1}
-    loop = asyncio.get_event_loop()
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+    def _extract_metadata():
+        try:
+            vcap = cv2.VideoCapture(file_path)
+            if not vcap.isOpened():
+                return default_values
+            width = round(vcap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = round(vcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = vcap.get(cv2.CAP_PROP_FPS)
+            frame_count = vcap.get(cv2.CAP_PROP_FRAME_COUNT)
+            vcap.release()
+            if fps <= 0 or frame_count <= 0:
+                return default_values
+            duration = round(frame_count / fps)
+            return {'width': width, 'height': height, 'duration': max(duration, 1)}
+        except Exception as e:
+            logger.error(f"视频元数据提取出错: {e}")
+            return default_values
 
     try:
-        def _extract_metadata():
-            try:
-                vcap = cv2.VideoCapture(file_path)
-                if not vcap.isOpened():
-                    return default_values
-                width = round(vcap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = round(vcap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                fps = vcap.get(cv2.CAP_PROP_FPS)
-                frame_count = vcap.get(cv2.CAP_PROP_FRAME_COUNT)
-                if fps <= 0:
-                    return default_values
-                duration = round(frame_count / fps)
-                if duration <= 0:
-                    return default_values
-                vcap.release()
-                return {'width': width, 'height': height, 'duration': duration}
-            except Exception as e:
-                logger.error(f"视频元数据提取出错: {e}")
-                return default_values
-
-        return await loop.run_in_executor(executor, _extract_metadata)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _extract_metadata)
     except Exception as e:
         logger.error(f"获取视频元数据出错: {e}")
         return default_values

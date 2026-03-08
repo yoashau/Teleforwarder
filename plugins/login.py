@@ -223,7 +223,11 @@ async def logout_command(client, message):
         # 清理内存中的用户客户端
         try:
             from plugins.batch import UC
-            if UC.get(user_id):
+            if user_id in UC:
+                try:
+                    await UC[user_id].stop()
+                except Exception:
+                    pass
                 del UC[user_id]
         except Exception:
             pass

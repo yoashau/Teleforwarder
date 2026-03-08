@@ -17,7 +17,7 @@ from plugins.batch import extract_single, extract_range
 # ─── Telegram 链接正则 ────────────────────────────────────────────────────────
 
 _TG_RE = re.compile(
-    r'https://t\.me/(?:c/)?[^/\s]+/\d+',
+    r'https://t\.me/(?:c/)?[^/\s]+/\d+(?:/\d+)?',
     re.IGNORECASE
 )
 

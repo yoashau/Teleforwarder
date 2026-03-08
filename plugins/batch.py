@@ -309,15 +309,18 @@ async def _send_media_group_physical(c, u, m, tcid, d, rtmid, cap):
             else:
                 media_inputs.append(InputMediaDocument(gf, caption=item_cap))
 
-        if media_inputs:
-            try:
-                await c.edit_message_text(d, p_msg.id, f'⬆️ 正在上传相册（共 {len(media_inputs)} 项）...')
-            except Exception:
-                pass
-            try:
-                await c.send_media_group(tcid, media_inputs, reply_to_message_id=rtmid)
-            except PeerIdInvalid:
-                return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
+        if not media_inputs:
+            await c.delete_messages(d, p_msg.id)
+            return '❌ 相册所有项目均下载失败。'
+
+        try:
+            await c.edit_message_text(d, p_msg.id, f'⬆️ 正在上传相册（共 {len(media_inputs)} 项）...')
+        except Exception:
+            pass
+        try:
+            await c.send_media_group(tcid, media_inputs, reply_to_message_id=rtmid)
+        except PeerIdInvalid:
+            return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
 
         await c.delete_messages(d, p_msg.id)
         return '完成。'

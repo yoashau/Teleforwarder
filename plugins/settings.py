@@ -213,6 +213,9 @@ async def _handle_deleteword(event, user_id):
 async def _handle_setthumb(event, user_id):
     if event.photo:
         temp_path = await event.download_media()
+        if not temp_path:
+            await event.respond('❌ 图片下载失败，请重试。')
+            return
         try:
             thumb_path = f'{user_id}.jpg'
             if os.path.exists(thumb_path):
@@ -259,7 +262,8 @@ async def rename_file(file, sender, edit):
         for word, replace_word in replacements.items():
             original_file_name = original_file_name.replace(word, replace_word)
 
-        new_file_name = f'{original_file_name} {custom_rename_tag}.{file_extension}'.strip()
+        name_part = f'{original_file_name} {custom_rename_tag}'.strip()
+        new_file_name = f'{name_part}.{file_extension}'
         os.rename(file, new_file_name)
         return new_file_name
     except Exception as e:
