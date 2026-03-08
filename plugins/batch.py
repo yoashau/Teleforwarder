@@ -360,8 +360,8 @@ async def process_msg(c, u, m, d, lt, uid, i):
 
         user_cap = await get_user_data_key(d, 'caption', '') or ''
 
-        # ── 纯文本消息 ────────────────────────────────────────────────────────
-        if m.text and not m.media:
+        # ── 纯文本消息（含带网页预览的蓝链消息，web_page 属文本类型，上限 4096 字符）
+        if m.text and (not m.media or getattr(m, 'web_page', None) is not None):
             proc = await process_text_with_rules(d, m.text.markdown)
             final = f'{proc}\n\n{user_cap}' if user_cap else proc
             try:
@@ -415,6 +415,15 @@ async def process_msg(c, u, m, d, lt, uid, i):
         except PeerIdInvalid:
             return '⚠️ 转发失败：Bot 尚未与目标聊天建立会话，请点击启动 Bot 或将其拉入目标群组。'
         except Exception as e:
+            if 'MEDIA_CAPTION_TOO_LONG' in str(e) and cap:
+                # caption 超过 1024 字符限制：截断后重试
+                try:
+                    await c.copy_message(tcid, m.chat.id, m.id,
+                                         caption=cap[:1020] + '…',
+                                         reply_to_message_id=rtmid)
+                    return '完成。'
+                except Exception:
+                    pass
             return f'出错：{str(e)[:80]}'
 
         # ── 物理搬运降级（突破禁止转发限制）─────────────────────────────────
